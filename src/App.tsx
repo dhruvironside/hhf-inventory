@@ -1,5 +1,126 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import * as React from "react";
 
+// ─── Barcode Scanner Component ─────────────────────────────
+function BarcodeScanner({ onScan, onClose }) {
+  const videoRef = React.useRef(null);
+  const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(true);
+
+  useEffect(() => {
+    let stream = null;
+    let animFrame = null;
+    let canvas = document.createElement("canvas");
+    let ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    const startCamera = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: 640, height: 480 }
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play();
+          videoRef.current.onloadedmetadata = () => scan();
+        }
+      } catch (e) {
+        setError("Camera access denied. Please allow camera permission.");
+      }
+    };
+
+    const scan = () => {
+      if (!videoRef.current || !scanning) return;
+      const v = videoRef.current;
+      if (v.readyState === v.HAVE_ENOUGH_DATA) {
+        canvas.width = v.videoWidth;
+        canvas.height = v.videoHeight;
+        ctx.drawImage(v, 0, 0);
+        try {
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          // Use ZXing if available
+          if (window.ZXing) {
+            const hints = new window.ZXing.DecodeHintType();
+            const reader = new window.ZXing.MultiFormatReader();
+            const luminance = new window.ZXing.HTMLCanvasElementLuminanceSource(canvas);
+            const bitmap = new window.ZXing.BinaryBitmap(new window.ZXing.HybridBinarizer(luminance));
+            try {
+              const result = reader.decode(bitmap);
+              if (result) { onScan(result.getText()); return; }
+            } catch {}
+          }
+        } catch {}
+      }
+      animFrame = requestAnimationFrame(scan);
+    };
+
+    startCamera();
+    return () => {
+      setScanning(false);
+      if (animFrame) cancelAnimationFrame(animFrame);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)",
+      zIndex: 1000, display: "flex", flexDirection: "column",
+    }}>
+      <div style={{ padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ color: "white", fontSize: 16, fontWeight: 700 }}>Scan Barcode</span>
+        <button onClick={onClose} style={{
+          background: "#333", border: "none", color: "white",
+          borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontFamily: "inherit",
+        }}>Cancel</button>
+      </div>
+      {error ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>📷</div>
+          <div style={{ color: "#ef4444", textAlign: "center", marginBottom: 20, fontSize: 14 }}>{error}</div>
+          <div style={{ color: "#94a3b8", textAlign: "center", fontSize: 13, marginBottom: 20 }}>
+            You can also type the barcode manually below
+          </div>
+          <ManualInput onScan={onScan} />
+        </div>
+      ) : (
+        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+          <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted playsInline />
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 260, height: 160, border: "2px solid #38bdf8", borderRadius: 12, position: "relative" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "#38bdf8", animation: "scanline 2s ease-in-out infinite" }} />
+            </div>
+          </div>
+          <div style={{ position: "absolute", bottom: 40, left: 0, right: 0, textAlign: "center" }}>
+            <div style={{ color: "white", fontSize: 13, marginBottom: 16 }}>Point camera at barcode</div>
+            <ManualInput onScan={onScan} />
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes scanline { 0%,100%{top:0} 50%{top:calc(100% - 2px)} }`}</style>
+    </div>
+  );
+}
+
+function ManualInput({ onScan }) {
+  const [val, setVal] = useState("");
+  return (
+    <div style={{ display: "flex", gap: 8, padding: "0 20px" }}>
+      <input value={val} onChange={e => setVal(e.target.value)}
+        placeholder="Type barcode manually..."
+        onKeyDown={e => e.key === "Enter" && val && onScan(val)}
+        style={{
+          flex: 1, background: "#1a2a3e", border: "1px solid #38bdf8",
+          borderRadius: 8, padding: "10px 14px", color: "white",
+          fontSize: 14, fontFamily: "inherit", outline: "none",
+        }}
+      />
+      <button onClick={() => val && onScan(val)} style={{
+        background: "#1d4ed8", border: "none", color: "white",
+        borderRadius: 8, padding: "10px 16px", cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
+      }}>Go</button>
+    </div>
+  );
+}
 // ─── Supabase Config ───────────────────────────────────────
 const SUPABASE_URL = "https://wjoqxjrtzwidkeuoqizg.supabase.co";
 const SUPABASE_KEY = "sb_publishable_nbAu80zQKLPz1VXqclie0g_z7JYlYZN";
@@ -423,6 +544,7 @@ function DispenseScreen({ onBack, items, office, addLog }) {
   const [qty, setQty] = useState(1);
   const [staff, setStaff] = useState(STAFF[0].name);
   const [done, setDone] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
 
   const found = items.find(i => i.id === itemId || i.name.toLowerCase().includes(itemId.toLowerCase()));
   const locItems = items.filter(i => i.location === loc);
@@ -432,6 +554,13 @@ function DispenseScreen({ onBack, items, office, addLog }) {
     addLog({ item: found.name, qty, staff, location: loc });
     setDone(true);
   };
+
+  if (showScanner) return (
+    <BarcodeScanner
+      onScan={(code) => { setItemId(code); setShowScanner(false); }}
+      onClose={() => setShowScanner(false)}
+    />
+  );
 
   if (done) return (
     <Screen title="Dispense Item" onBack={onBack}>
@@ -467,7 +596,7 @@ function DispenseScreen({ onBack, items, office, addLog }) {
           <datalist id="items-list">
             {locItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
           </datalist>
-          <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 18, color: C.blue }}>⊞</div>
+          <button onClick={() => setShowScanner(true)} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: C.blue2, border: "none", borderRadius: 7, padding: "6px 10px", cursor: "pointer", fontSize: 16, color: "white" }}>⊞</button>
         </div>
       </div>
 
@@ -586,7 +715,7 @@ function TransferScreen({ onBack, items, office }) {
           <datalist id="transfer-items">
             {fromItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
           </datalist>
-          <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 18, color: C.blue }}>⊞</div>
+          <button onClick={() => setShowScanner(true)} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: C.blue2, border: "none", borderRadius: 7, padding: "6px 10px", cursor: "pointer", fontSize: 16, color: "white" }}>⊞</button>
         </div>
       </div>
 
